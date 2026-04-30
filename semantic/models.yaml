@@ -1,0 +1,11 @@
+models:
+  pl:
+    table: com_kk_sub_pl_risk_ident_t
+    dimensions: [company, year]
+  bs:
+    table: com_kk_sub_bs_risk_ident_t
+    dimensions: [company, year]
+  cf:
+    table: com_kk_sub_cf_risk_ident_t
+    dimensions: [company, year]
+

@@ -1,0 +1,174 @@
+version: "2026-04-23"
+metrics:
+  revenue:
+    label: 营业收入
+    synonyms: [收入, 营收, 营业额, total_revenue]
+    table: pl
+    column: value
+    report_item_code: total_revenue
+    agg: sum
+    unit: 元
+    type: raw
+  net_profit:
+    label: 净利润
+    synonyms: [净利, 净收益, net_profit]
+    table: pl
+    column: value
+    report_item_code: net_profit
+    agg: sum
+    unit: 元
+    type: raw
+  cost:
+    label: 营业成本
+    synonyms: [成本, cost_of_revenue, operating_cost, cost_of_goods_sold]
+    table: pl
+    column: value
+    report_item_code: cost_of_revenue
+    agg: sum
+    unit: 元
+    type: raw
+  gross_profit:
+    label: 毛利润
+    synonyms: [毛利润, gross_profit]
+    table: pl
+    column: value
+    report_item_code: gross_profit
+    agg: sum
+    unit: 元
+    type: raw
+  gross_margin:
+    label: 毛利率
+    synonyms: [毛利率, gross_margin]
+    table: pl
+    column: value
+    report_item_code: gross_margin
+    agg: avg
+    unit: "%"
+    type: raw
+  operating_profit:
+    label: 营业利润
+    synonyms: [营业利润, operating_profit]
+    table: pl
+    column: value
+    report_item_code: operating_profit
+    agg: sum
+    unit: 元
+    type: raw
+  income_tax:
+    label: 所得税费用
+    synonyms: [所得税, 所得税费用, income_tax]
+    table: pl
+    column: value
+    report_item_code: income_tax
+    agg: sum
+    unit: 元
+    type: raw
+  net_margin:
+    label: 净利率
+    synonyms: [净利率, net_margin]
+    table: pl
+    column: value
+    report_item_code: net_margin
+    agg: avg
+    unit: "%"
+    type: raw
+  total_assets:
+    label: 资产总计
+    synonyms: [总资产, total_assets]
+    table: bs
+    column: value
+    report_item_code: total_assets
+    agg: sum
+    unit: 元
+    type: raw
+  total_liabilities:
+    label: 负债总计
+    synonyms: [总负债, total_liabilities]
+    table: bs
+    column: value
+    report_item_code: total_liabilities
+    agg: sum
+    unit: 元
+    type: raw
+  total_equity:
+    label: 所有者权益
+    synonyms: [所有者权益, total_equity, equity]
+    table: bs
+    column: value
+    report_item_code: total_equity
+    agg: sum
+    unit: 元
+    type: raw
+  current_assets:
+    label: 流动资产
+    synonyms: [流动资产, current_assets]
+    table: bs
+    column: value
+    report_item_code: current_assets
+    agg: sum
+    unit: 元
+    type: raw
+  non_current_assets:
+    label: 非流动资产
+    synonyms: [非流动资产, non_current_assets]
+    table: bs
+    column: value
+    report_item_code: non_current_assets
+    agg: sum
+    unit: 元
+    type: raw
+  current_liabilities:
+    label: 流动负债
+    synonyms: [流动负债, current_liabilities]
+    table: bs
+    column: value
+    report_item_code: current_liabilities
+    agg: sum
+    unit: 元
+    type: raw
+  non_current_liabilities:
+    label: 非流动负债
+    synonyms: [非流动负债, non_current_liabilities]
+    table: bs
+    column: value
+    report_item_code: non_current_liabilities
+    agg: sum
+    unit: 元
+    type: raw
+  operating_cashflow:
+    label: 经营活动产生的现金流量净额
+    synonyms: [经营现金流, 经营活动现金流, 经营活动产生的现金流量净额, operating_cash_flow]
+    table: cf
+    column: value
+    report_item_code: operating_cash_flow
+    agg: sum
+    unit: 元
+    type: raw
+  investing_cash_flow:
+    label: 投资活动产生的现金流量净额
+    synonyms: [投资现金流, investing_cash_flow]
+    table: cf
+    column: value
+    report_item_code: investing_cash_flow
+    agg: sum
+    unit: 元
+    type: raw
+  financing_cash_flow:
+    label: 筹资活动产生的现金流量净额
+    synonyms: [筹资现金流, financing_cash_flow]
+    table: cf
+    column: value
+    report_item_code: financing_cash_flow
+    agg: sum
+    unit: 元
+    type: raw
+  asset_liability_ratio:
+    label: 资产负债率
+    synonyms: [负债率, 资产负债率]
+    formula: total_liabilities / total_assets
+    depends_on:
+      - total_liabilities
+      - total_assets
+    unit: "%"
+    type: derived
+

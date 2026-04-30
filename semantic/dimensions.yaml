@@ -1,0 +1,8 @@
+dimensions:
+  company:
+    label: 公司
+    column: company_cn_name
+  year:
+    label: 年份
+    column: period_id
+
