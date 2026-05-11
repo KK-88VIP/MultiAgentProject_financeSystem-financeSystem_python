@@ -10,9 +10,17 @@
 
 # 这个服务负责解析用户角色，并输出该用户合法的查询范围。
 
-from typing import List
+from typing import List, Optional, Set
 
+from app.core.config import settings
 from app.models.auth import PermissionResponse
+
+
+def _dev_admin_uid_set() -> Set[str]:
+    raw = (settings.DEV_ADMIN_USER_IDS or "").strip()
+    if not raw:
+        return set()
+    return {s.strip() for s in raw.split(",") if s.strip()}
 
 
 class PermissionService:
@@ -40,19 +48,36 @@ class PermissionService:
             return True
         return target_company in allowed_companies
 
-    def get_user_permissions(self, user_id: str) -> PermissionResponse:
+    def get_user_permissions(
+        self, user_id: str, header_role: Optional[str] = None
+    ) -> PermissionResponse:
         """
-        返回用户权限摘要（MVP：基于 user_id 规则占位，后续可接 IAM/权限表）。
+        返回用户权限摘要（MVP：基于 user_id + 请求头角色占位，后续可接 IAM/权限表）。
+
+        管理员判定（与联调约定 X-User-Role: admin|user 对齐）：
+        - 请求头 / 参数角色为 admin；或
+        - user_id 为历史占位 admin / system_admin；或
+        - APP_ENV=dev 且 user_id 在 DEV_ADMIN_USER_IDS（.env 逗号分隔）中。
         """
-        if user_id in {"admin", "system_admin"}:
+        role_norm = (header_role or "").strip().lower()
+        uid = (user_id or "anonymous").strip() or "anonymous"
+
+        if role_norm == "admin" or uid in {"admin", "system_admin"}:
             return PermissionResponse(
-                user_id=user_id,
+                user_id=uid,
+                role="admin",
+                authorized_companies=["*"],
+                allowed=True,
+            )
+        if settings.APP_ENV == "dev" and uid in _dev_admin_uid_set():
+            return PermissionResponse(
+                user_id=uid,
                 role="admin",
                 authorized_companies=["*"],
                 allowed=True,
             )
         return PermissionResponse(
-            user_id=user_id,
+            user_id=uid,
             role="user",
             authorized_companies=[],
             allowed=True,

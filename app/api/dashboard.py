@@ -11,6 +11,7 @@
 from fastapi import APIRouter, Depends, Header, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.db.session import get_db
 from app.models.common import ApiResponse
 from app.models.dashboard import ChartResponse, KpiResponse
@@ -25,13 +26,24 @@ _filters_service = DashboardFiltersService()
 @router.get("/filters", response_model=ApiResponse[dict])
 async def get_dashboard_filters(
     user_id: str | None = Header(None, alias="X-User-Id"),
+    user_role: str = Header("user", alias="X-User-Role"),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[dict]:
     """
     筛选器统一数据源：当前用户可见公司列表 + 库内可用年份（number[]，降序）。
     无公司权限时返回 companies=[], years=[]，HTTP 与业务码仍为 200/success。
+    管理员需同时或单独使用 X-User-Role: admin（与 /ask 契约一致）。
+    本地若前端未带头，可在 .env 设置 DEV_ASSUME_ADMIN_FOR_FILTERS=true（仅 dev）。
     """
-    data = await _filters_service.get_filters(db, user_id)
+    effective_role = user_role
+    if (
+        settings.DEV_ASSUME_ADMIN_FOR_FILTERS
+        and settings.APP_ENV == "dev"
+        and (user_role or "").strip().lower() == "user"
+    ):
+        effective_role = "admin"
+
+    data = await _filters_service.get_filters(db, user_id, effective_role)
     return ApiResponse.success(data=data)
 
 

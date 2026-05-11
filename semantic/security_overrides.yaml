@@ -1,0 +1,23 @@
+security_overrides:
+  # 在语义层派生白名单基础上，补充允许的系统表（例如权限/下拉所需维表）
+  extra_allowed_tables:
+    - com_kk_sub_company_d
+
+  # 在语义层派生列基础上，补充允许的系统列
+  extra_allowed_columns:
+    - company_code
+    - company_en_name
+    - report_item_code
+    - report_item_cn_name
+    - report_item_en_name
+    - risk_identification
+
+  # 在语义层派生表基础上，显式收紧（deny 优先级高于 allow）
+  deny_tables: []
+
+  # 在语义层派生列基础上，显式收紧（deny 优先级高于 allow）
+  deny_columns: []
+
+  # 关键字覆盖：为空时回退使用 app/security/whitelist.py 中的默认列表
+  forbidden_keywords: []
+

@@ -18,14 +18,16 @@ class DashboardFiltersService:
     def __init__(self):
         self._permission = PermissionService()
 
-    async def get_filters(self, db, user_id: str | None) -> dict:
+    async def get_filters(
+        self, db, user_id: str | None, user_role: str | None = None
+    ) -> dict:
         """
         返回 { companies: CompanyItem[], years: int[] }。
         years 为去重后的四位公历年份，按降序排列。
         无公司权限时 companies 为空；years 仍返回库中可见年份（降序），由产品决定是否再收紧。
         """
         uid = (user_id or "anonymous").strip() or "anonymous"
-        perm = self._permission.get_user_permissions(uid)
+        perm = self._permission.get_user_permissions(uid, user_role)
 
         repo = CompanyRepository(db)
         all_items: List[CompanyItem] = await repo.list_company_items()

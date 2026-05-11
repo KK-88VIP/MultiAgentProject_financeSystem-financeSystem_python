@@ -1,10 +1,10 @@
 # 测试财务计算的核心“熔断”逻辑。
 
-from app.services.metric_service import MetricCalculator
+from app.services.metric_service import MetricService
 
 
 def test_safe_divide():
-    service = MetricCalculator()
+    service = MetricService()
 
     # 正常除法
     assert service.safe_divide(100, 2) == 50

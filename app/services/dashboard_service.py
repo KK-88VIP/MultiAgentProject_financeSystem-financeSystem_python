@@ -16,7 +16,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.services.metric_service import MetricCalculator
+from app.services.metric_service import MetricService
 from semantic.registry import MetricRegistry
 
 
@@ -41,7 +41,7 @@ class DashboardService:
     _RATE_UNITS = {"%", "比例"}
 
     def __init__(self) -> None:
-        self.metric_service = MetricCalculator()
+        self.metric_service = MetricService()
         self.registry = MetricRegistry()
 
     async def _sum_by_period(

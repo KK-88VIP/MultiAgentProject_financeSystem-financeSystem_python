@@ -106,13 +106,11 @@ def match_companies(
 
 def has_ambiguity(matches: List[str]) -> bool:
     """
-    判断匹配结果是否存在歧义，即是否需要进行澄清交互。
+    判断「单次」匹配结果是否对应多家候选（需用户澄清选其一）。
 
-    歧义条件：
-        - 匹配结果数量大于 1（用户输入可能对应多家公司）
-
-    用途：
-        - 在 IntentService 中调用，决定是否中断常规流程，向客户端发送 clarification 事件
+    注意：filters 里出现多家公司也可能是「多主体对比」意图，不能仅用 len>1 判断；
+    IntentService 已改为按「每个输入简称」单独匹配并打 company_resolution_ambiguous。
+    本函数仍可用于仅需判断单次 match_companies 返回列表长度的场景。
     """
     return len(matches) > 1
 

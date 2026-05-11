@@ -43,12 +43,12 @@ from semantic.registry import MetricRegistry
 logger = get_logger(__name__)
 
 
-class MetricCalculator:
+class MetricService:
     """
     派生指标计算器类
 
     使用方法：
-        calc = MetricCalculator()
+        calc = MetricService()
         enriched_data = calc.calc_derived_metrics(raw_data)
     """
 
@@ -98,7 +98,7 @@ class MetricCalculator:
                     df[metric] = self._apply_formula(df, metric, meta)
                 except Exception as e:
                     # 计算失败（如除零）不应阻断整个请求，仅记录警告
-                    logger.warning(f"[MetricCalculator] failed to calc {metric}: {e}")
+                    logger.warning(f"[MetricService] failed to calc {metric}: {e}")
 
             # 清理异常值，确保 JSON 可序列化
             df = self._clean_df(df)
@@ -107,7 +107,7 @@ class MetricCalculator:
 
         except Exception as e:
             # 若整个流程出现意外错误（如 DataFrame 转换失败），降级返回原始数据
-            logger.error(f"[MetricCalculator] error: {e}")
+            logger.error(f"[MetricService] error: {e}")
             return data
 
     # =========================

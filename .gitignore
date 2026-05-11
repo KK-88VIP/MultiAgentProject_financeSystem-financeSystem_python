@@ -26,6 +26,7 @@ htmlcov/
 # Project runtime / generated
 cache/
 logs/
+debug*.log
 
 # OS
 .DS_Store

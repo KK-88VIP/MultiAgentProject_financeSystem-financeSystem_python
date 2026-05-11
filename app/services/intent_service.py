@@ -22,7 +22,7 @@
 5. 修复和补全 IR 中的缺失字段（如默认 group_by、limit），保证输出的健壮性。
 
 设计要点：
-- 支持注入真实 LLM（`parse_intent_json`）；失败时可降级为本地启发式。
+- 支持注入真实 LLM（`parse_intent_json`）；失败时对非闲聊问题返回「无法解析」，不注入占位查询。
 - 指标标准化依赖 metric_registry 中的别名索引。
 - 公司匹配依赖独立的 company_matcher 工具模块，保持匹配逻辑的可测试性。
 - 歧义检测结果由上层 QueryService 消费，决定是否中断常规流程并向客户端发送澄清请求。
@@ -49,9 +49,123 @@ from pydantic import BaseModel
 
 from app.core.logger import get_logger
 from semantic.registry import MetricRegistry
-from app.utils.company_matcher import match_companies, has_ambiguity, is_no_match
+from app.utils.company_matcher import match_companies, is_no_match
 
 logger = get_logger(__name__)
+
+# 宽泛「经营/业绩对比」问句的默认年度（用户未写明年份时）
+_DEFAULT_COMPARISON_YEAR = 2025
+
+# 问句中可识别的公司简称（长词优先，避免「阿里巴巴」再命中「阿里」重复）
+_KNOWN_COMPANY_SHORT_NAMES: tuple[str, ...] = tuple(
+    sorted(
+        (
+            "华为技术有限公司",
+            "腾讯",
+            "阿里巴巴",
+            "阿里",
+            "百度",
+            "京东",
+            "小米",
+            "美团",
+            "比亚迪",
+            "宁德时代",
+            "招商银行",
+            "中国平安",
+            "工商银行",
+            "建设银行",
+            "农业银行",
+            "中国银行",
+            "华为",
+        ),
+        key=len,
+        reverse=True,
+    )
+)
+
+
+def _is_vague_operating_comparison_question(text: str) -> bool:
+    """是否属于「多家公司经营/业绩对比」类宽泛问法（需落到单表 pl + 核心指标）。"""
+    t = (text or "").strip()
+    if len(t) < 4:
+        return False
+    has_cmp = any(k in t for k in ("对比", "比较", " VS ", " vs ", "versus"))
+    has_op = any(
+        k in t
+        for k in (
+            "经营情况",
+            "经营状况",
+            "经营业绩",
+            "经营表现",
+            "业绩",
+            "营运",
+            "财务表现",
+            "盈利情况",
+        )
+    )
+    if not (has_cmp and has_op):
+        return False
+    if "两家" in t or "多家" in t:
+        return True
+    if _guess_company_short_names(t) and any(
+        sep in t for sep in ("和", "与", "跟", "及", ",", "，", "、")
+    ):
+        return True
+    return len(_guess_company_short_names(t)) >= 2
+
+
+def _guess_company_short_names(q: str) -> List[str]:
+    """从问句中按已知简称抽取公司（互不包含则都保留）。"""
+    found: List[str] = []
+    for token in _KNOWN_COMPANY_SHORT_NAMES:
+        if token not in q:
+            continue
+        if any(
+            token != existing and (token in existing or existing in token)
+            for existing in found
+        ):
+            continue
+        found.append(token)
+    return found
+
+
+def _strip_followup_particles(text: str) -> str:
+    """去掉追问句尾语气词与标点，便于用公司名片段做 match_companies。"""
+    t = (text or "").strip().strip("？?,.，。 \t")
+    suffixes = ("咧", "呢", "呐", "吧", "嘛", "呀", "么", "哦", "啊", "哪", "咯")
+    changed = True
+    while changed and t:
+        changed = False
+        for suf in suffixes:
+            if t.endswith(suf):
+                t = t[: -len(suf)].strip().strip("？?,.，。 \t")
+                changed = True
+                break
+    return t
+
+
+def _match_companies_in_followup_phrase(cleaned: str, all_companies: List[str]) -> List[str]:
+    """从短句中解析公司：整句匹配失败后尝试去前缀、尾窗切片。"""
+    if not cleaned or not all_companies:
+        return []
+    m = match_companies(cleaned, all_companies)
+    if not is_no_match(m):
+        return m
+    t = cleaned
+    for prefix in ("那", "这", "换", "再看看", "看下", "请问"):
+        if t.startswith(prefix):
+            t = t[len(prefix) :].strip()
+            if t:
+                m = match_companies(t, all_companies)
+                if not is_no_match(m):
+                    return m
+    max_len = min(8, len(cleaned))
+    for size in range(max_len, 1, -1):
+        frag = cleaned[-size:]
+        m = match_companies(frag, all_companies)
+        if not is_no_match(m):
+            return m
+    return []
 
 
 # =========================
@@ -62,7 +176,7 @@ class QueryIR(BaseModel):
     查询中间表示（Intermediate Representation）
 
     该模型定义了从用户自然语言问题中抽取出的标准化查询结构，是 LLM 输出与
-    SQLBuilder 输入之间的约定格式。所有字段均为可选，由 IntentService 负责
+    QueryPlanner/SQLGenerator 输入之间的约定格式。所有字段均为可选，由 IntentService 负责
     补全默认值并进行合法性校验。
 
     字段说明：
@@ -74,6 +188,8 @@ class QueryIR(BaseModel):
         - limit: 返回行数上限，若未指定则由 repair_ir 补入默认值。
         - intent_type: "query" 表示需要查库；"chitchat" 表示闲聊，不触发 SQL。
         - reply: 闲聊时模型给出的简短回复（可选）。
+        - company_resolution_ambiguous: 某一公司简称是否匹配到多家主体（需澄清），多公司对比且每家唯一命中时为 False。
+        - company_clarification_options: 仅当 company_resolution_ambiguous 时，供前端展示的候选全称列表。
     """
     intent_type: str = "query"
     reply: Optional[str] = None
@@ -83,6 +199,8 @@ class QueryIR(BaseModel):
     group_by: List[str] = []
     order_by: Optional[List[Dict]] = None
     limit: Optional[int] = None
+    company_resolution_ambiguous: bool = False
+    company_clarification_options: List[str] = []
 
 
 class IntentService:
@@ -133,9 +251,22 @@ class IntentService:
         # 步骤2：构造 Pydantic 模型对象
         ir = QueryIR(**raw)
 
+        # 步骤2b：追问被误判为闲聊时，用 Redis 上下文 + 公司名解析救回为 query
+        ir = await self._rescue_chitchat_to_query_if_followup(question, ir, context)
+
+        # 步骤2c：「多家公司经营/业绩对比」宽泛问法 → 单表利润表 + 核心指标（避免闲聊或跨表失败）
+        ir = self._apply_operating_situation_comparison_bundle(question, ir)
+
         # 步骤3：指标名称标准化（闲聊可不查指标）
         if ir.intent_type != "chitchat":
             ir.metrics = self.normalize_metrics(ir.metrics)
+            if _is_vague_operating_comparison_question(question) and self._metrics_span_multiple_tables(
+                ir.metrics
+            ):
+                ir.table = "pl"
+                ir.metrics = ["revenue", "net_profit", "operating_profit"]
+                if "company" not in ir.group_by:
+                    ir.group_by = ["company"]
 
         # 步骤4：公司名称模糊匹配
         ir = await self.normalize_companies(ir)
@@ -153,7 +284,7 @@ class IntentService:
         调用 LLM 服务生成结构化查询意图。
 
         若注入 `llm_client` 且提供 `parse_intent_json`，则走真实模型解析；
-        解析失败时降级为本地启发式，避免整条链路不可用。
+        解析失败或无 LLM 时，对非闲聊问题返回 chitchat +「无法解析」说明，不构造占位查询。
 
         参数：
             question: 用户问题。
@@ -166,7 +297,7 @@ class IntentService:
             self.llm_client, "parse_intent_json"
         ):
             try:
-                raw = await self.llm_client.parse_intent_json(question)
+                raw = await self.llm_client.parse_intent_json(question, context)
                 return self._map_llm_to_ir_dict(raw)
             except Exception as e:
                 logger.warning(
@@ -264,7 +395,7 @@ class IntentService:
         return s
 
     def _fallback_ir_dict(self, question: str) -> Dict[str, Any]:
-        """无可用 LLM 或调用失败时的降级：闲聊走本地规则，否则返回可跑通的最小问数样例。"""
+        """无可用 LLM 或调用失败时的降级：闲聊走本地规则；其余返回无法解析（不查库、无占位问数）。"""
         q = (question or "").strip()
         # 与 tests/api/test_query.py 中的占位问句对齐，避免 CI 无密钥时仍走数据库
         if q == "测试问题":
@@ -290,12 +421,12 @@ class IntentService:
                 "limit": None,
             }
         return {
-            "intent_type": "query",
-            "reply": None,
-            "table": "pl",
-            "metrics": ["revenue"],
-            "filters": {"year": [2024], "company": ["腾讯"]},
-            "group_by": ["company"],
+            "intent_type": "chitchat",
+            "reply": "无法解析您的问题，请调整表述后重试。",
+            "table": None,
+            "metrics": [],
+            "filters": {},
+            "group_by": [],
             "order_by": None,
             "limit": None,
         }
@@ -327,6 +458,91 @@ class IntentService:
         if "who are you" in t or "hello" in t or "hi" == t.strip():
             return True
         return len(text) <= 6 and text.strip() in ("?", "？", "嗯", "哦")
+
+    def _metrics_span_multiple_tables(self, metric_keys: List[str]) -> bool:
+        """标准化后的指标是否落在多张事实表上（当前规划器不支持跨表）。"""
+        tables: set[str] = set()
+        for k in metric_keys or []:
+            meta = self.metric_registry.get_metric(k)
+            if meta and meta.get("table"):
+                tables.add(str(meta["table"]))
+        return len(tables) > 1
+
+    def _apply_operating_situation_comparison_bundle(self, question: str, ir: QueryIR) -> QueryIR:
+        """
+        将「对比多家经营/业绩」类宽泛问题落到利润表 + 核心经营指标，避免被判闲聊或跨表报错。
+        若 LLM 已给出 company 过滤则保留，否则从问句中猜测简称。
+        """
+        if not _is_vague_operating_comparison_question(question):
+            return ir
+        ir.intent_type = "query"
+        ir.reply = None
+        ir.table = "pl"
+        ir.metrics = ["营业收入", "净利润", "营业利润"]
+        ir.group_by = list(dict.fromkeys([*(ir.group_by or []), "company"]))
+        if not ir.filters.get("year"):
+            ir.filters["year"] = [_DEFAULT_COMPARISON_YEAR]
+        if not ir.filters.get("company"):
+            guessed = _guess_company_short_names(question)
+            if guessed:
+                ir.filters["company"] = guessed
+        return ir
+
+    async def _rescue_chitchat_to_query_if_followup(
+        self, question: str, ir: QueryIR, context: Dict[str, Any]
+    ) -> QueryIR:
+        """
+        模型将「换公司/换主体」追问判成 chitchat 时，用 Redis 上轮要点 + 公司名解析救回为 query。
+
+        例：上轮「华为 2022–2025 总资产」，本轮「腾讯咧？」。
+        """
+        if ir.intent_type != "chitchat":
+            return ir
+
+        metrics_ctx = context.get("metrics") or []
+        if isinstance(metrics_ctx, (list, tuple)):
+            metrics_list = [str(m) for m in metrics_ctx]
+        else:
+            metrics_list = [str(metrics_ctx)]
+        if not metrics_list:
+            return ir
+
+        table_ctx = context.get("table")
+        if not table_ctx:
+            meta0 = self.metric_registry.get_metric(metrics_list[0])
+            table_ctx = str(meta0.get("table") or "") if meta0 else ""
+        if not table_ctx or table_ctx not in ("bs", "pl", "cf"):
+            return ir
+
+        cleaned = _strip_followup_particles(question)
+        if len(cleaned) < 2:
+            return ir
+
+        all_companies = await self._get_all_companies()
+        if not all_companies:
+            return ir
+
+        matches = _match_companies_in_followup_phrase(cleaned, all_companies)
+        if is_no_match(matches):
+            return ir
+
+        year = context.get("year")
+        filters: Dict[str, Any] = {"company": matches}
+        if year is not None:
+            filters["year"] = year if isinstance(year, list) else [year]
+
+        group_by = list(context.get("group_by") or [])
+
+        return QueryIR(
+            intent_type="query",
+            reply=None,
+            table=table_ctx,
+            metrics=metrics_list,
+            filters=filters,
+            group_by=group_by,
+            order_by=None,
+            limit=None,
+        )
 
     # =========================
     # 标准化逻辑
@@ -386,15 +602,27 @@ class IntentService:
         # 获取全量公司名称列表
         all_companies = await self._get_all_companies()
 
-        matched = []
-        for c in companies:
-            matches = match_companies(c, all_companies)
+        raw_list = companies if isinstance(companies, list) else [companies]
+        matched: List[str] = []
+        ambiguous = False
+        clarification_pool: List[str] = []
+
+        for c in raw_list:
+            if c is None:
+                continue
+            raw_c = str(c).strip()
+            if not raw_c:
+                continue
+            matches = match_companies(raw_c, all_companies)
+            if len(matches) > 1:
+                ambiguous = True
+                clarification_pool.extend(matches)
             matched.extend(matches)
 
-        # 去重，避免同一公司因多个别名重复出现
-        matched = list(set(matched))
-
-        ir.filters["company"] = matched
+        # 保序去重；多公司对比（如华为+腾讯各命中 1 家）不应走澄清
+        ir.filters["company"] = list(dict.fromkeys(matched))
+        ir.company_resolution_ambiguous = ambiguous
+        ir.company_clarification_options = list(dict.fromkeys(clarification_pool))
         return ir
 
     async def _get_all_companies(self) -> List[str]:
@@ -419,11 +647,15 @@ class IntentService:
         if isinstance(first, dict):
             result: List[str] = []
             for r in rows:
-                name = r.get("company_cn_name") or r.get("company_name")
+                name = r.get("company_cn_name")
                 if name:
                     result.append(str(name))
             return result
         return [str(r) for r in rows]
+
+    async def list_all_company_names(self) -> List[str]:
+        """供闲聊等场景从维表拉取公司全称列表（与问数侧公司匹配同源）。"""
+        return await self._get_all_companies()
 
     # =========================
     # 歧义检测
@@ -443,10 +675,8 @@ class IntentService:
         """
         if ir.intent_type == "chitchat":
             return None
-        companies = ir.filters.get("company", [])
-
-        if has_ambiguity(companies):
-            return companies
+        if ir.company_resolution_ambiguous and ir.company_clarification_options:
+            return ir.company_clarification_options
 
         return None
 

@@ -48,6 +48,10 @@ class Settings(BaseSettings):
     DEBUG: bool = True                    # 是否开启调试模式，影响异常详情是否返回客户端
     HOST: str = "0.0.0.0"                # FastAPI 监听的 IP 地址
     PORT: int = 8000                      # 服务端口号
+    # 仅本地联调：当前端/代理未传 X-User-Role: admin 时，仍希望 /filters 有数据，可设 True（切勿用于生产）
+    DEV_ASSUME_ADMIN_FOR_FILTERS: bool = False
+    # 仅 APP_ENV=dev：下列 user_id（英文逗号分隔）一律视为管理员，无需 role 参数或 X-User-Role（切勿用于生产）
+    DEV_ADMIN_USER_IDS: str = ""
 
     # =========================
     # 数据库配置（MySQL）

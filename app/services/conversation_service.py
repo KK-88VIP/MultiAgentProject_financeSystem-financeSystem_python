@@ -43,6 +43,23 @@ from app.core.logger import get_logger
 
 logger = get_logger(__name__)
 
+# 模型常把指代填进 company，无法做库内匹配；清除后由 Redis 上轮名单补全。
+_VAGUE_COMPANY_FILTERS = frozenset(
+    {
+        "这些公司",
+        "上述公司",
+        "上面公司",
+        "这几家",
+        "那几家",
+        "那几家公司",
+        "以上公司",
+        "他们",
+        "它们",
+        "这批公司",
+        "前述公司",
+    }
+)
+
 
 class ConversationContextManager:
     """
@@ -194,9 +211,11 @@ class ConversationContextManager:
             - 若 IR 中未指定公司，则从上下文中继承 `company` 字段。
             - 若 IR 中未指定年份，则从上下文中继承 `year` 字段。
             - 若 IR 中未指定指标，则从上下文中继承 `metrics` 字段。
+            - 若 IR 中未指定表，则从上下文中继承 `table` 字段。
+            - 若 IR 中 group_by 为空，则从上下文中继承 `group_by` 字段。
 
         调用时机：
-            在 IntentService 解析完成后、SQLBuilder 构建 SQL 之前，由 QueryService 调用。
+            在 IntentService 解析完成后、QueryPlanner/SQLGenerator 生成 SQL 之前，由 QueryService 调用。
 
         参数：
             ir: 当前问题的 QueryIR 对象（已包含 LLM 解析结果）。
@@ -212,6 +231,15 @@ class ConversationContextManager:
                 → IR 中 metrics 为 ["net_profit"]，其他为空。
                 → 本方法自动补全 company 和 year。
         """
+        # 去掉无法匹配的指代型「公司名」，便于后续用上下文中的真实名单补全
+        raw_co = ir.filters.get("company")
+        if isinstance(raw_co, list) and raw_co:
+            cleaned = [str(x).strip() for x in raw_co if str(x).strip()]
+            if cleaned and all(x in _VAGUE_COMPANY_FILTERS for x in cleaned):
+                ir.filters.pop("company", None)
+        elif isinstance(raw_co, str) and raw_co.strip() in _VAGUE_COMPANY_FILTERS:
+            ir.filters.pop("company", None)
+
         # 补公司
         if not ir.filters.get("company") and context.get("company"):
             ir.filters["company"] = context["company"]
@@ -223,5 +251,14 @@ class ConversationContextManager:
         # 补指标
         if not ir.metrics and context.get("metrics"):
             ir.metrics = context["metrics"]
+
+        # 补表（追问常省略 table）
+        if not ir.table and context.get("table"):
+            ir.table = str(context["table"])
+
+        # 补分组（如上轮按年分组）
+        if not ir.group_by and context.get("group_by"):
+            gb = context["group_by"]
+            ir.group_by = list(gb) if isinstance(gb, list) else [gb]
 
         return ir
